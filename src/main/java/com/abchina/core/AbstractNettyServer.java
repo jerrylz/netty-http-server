@@ -12,13 +12,14 @@ import io.netty.channel.epoll.EpollServerSocketChannel;
 import io.netty.util.internal.PlatformDependent;
 
 import java.net.InetSocketAddress;
+import java.util.Map;
 
 
 /**
  * 一个抽象的netty服务端
  */
 public abstract class AbstractNettyServer implements Runnable{
-
+    ThreadLocal<String> threadLocal = new ThreadLocal<>();
     private String name;
     private ServerBootstrap bootstrap;
 
@@ -26,10 +27,13 @@ public abstract class AbstractNettyServer implements Runnable{
     private EventLoopGroup worker;
     private ChannelFactory<?extends ServerChannel> channelFactory;
     private ChannelInitializer<?extends Channel> initializerChannelHandler;
+    private Map<String, ChannelInitializer<?extends Channel>> initializerMap;
     private ChannelFuture closeFuture;
     private Channel serverChannel;
     private InetSocketAddress socketAddress;
     private boolean enableEpoll;
+
+    public AbstractNettyServer(){}
 
     public AbstractNettyServer(int port) {
         this(new InetSocketAddress(port));
@@ -47,8 +51,12 @@ public abstract class AbstractNettyServer implements Runnable{
         this.initializerChannelHandler = newInitializerChannelHandler();
     }
 
+    public void setInitializerMap(Map<String, ChannelInitializer<? extends Channel>> initializerMap) {
+        this.initializerMap = initializerMap;
+    }
 
     protected abstract ChannelInitializer<?extends Channel> newInitializerChannelHandler();
+    protected abstract Map<String, ChannelInitializer<?extends Channel>> newInitializerChannelHandlerMap();
 
     protected ServerBootstrap newServerBootstrap(){
         return new NettyServerBootstrap();
@@ -90,10 +98,11 @@ public abstract class AbstractNettyServer implements Runnable{
 
     @Override
     public final void run() {
+
         bootstrap
                 .group(boss, worker)
                 .channelFactory(channelFactory)
-                .childHandler(initializerChannelHandler)
+                .childHandler(initializerMap.get(Thread.currentThread().getName()))
                 .option(ChannelOption.TCP_NODELAY, true)
                 .option(ChannelOption.SO_REUSEADDR, true)
                 .option(ChannelOption.SO_BACKLOG, 128) // determining the number of connections queued

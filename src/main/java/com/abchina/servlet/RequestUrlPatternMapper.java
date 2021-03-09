@@ -1,5 +1,6 @@
 package com.abchina.servlet;
 
+import com.abchina.util.StaticResourcesUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -7,6 +8,7 @@ import javax.servlet.Servlet;
 import javax.servlet.ServletException;
 import java.io.IOException;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
  * 保存，计算URL-pattern与请求路径的匹配关系
@@ -163,8 +165,12 @@ public class RequestUrlPatternMapper {
                 mappingData.servlet = urlPatternContext.defaultServlet.object;
                 mappingData.servletName = urlPatternContext.defaultServlet.servletName;
             }
-            //TODO 暂不考虑请求静态目录资源
+            //处理静态资源
             if (path.charAt(path.length() - 1) != '/') {
+                boolean isStatic = StaticResourcesUtils.verifyPath(path);
+                MappedServlet mappedServlet = urlPatternContext.exactServlets.get("static-resource");
+                mappingData.servlet = mappedServlet.object;
+                mappingData.servletName = mappedServlet.servletName;
             }
         }
     }

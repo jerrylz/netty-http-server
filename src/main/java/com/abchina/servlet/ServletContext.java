@@ -1,5 +1,6 @@
 package com.abchina.servlet;
 
+import com.abchina.util.LogUtil;
 import com.abchina.util.MimeTypeUtil;
 import com.abchina.util.NamespaceUtil;
 import com.abchina.core.constants.HttpConstants;
@@ -50,6 +51,8 @@ public class ServletContext implements javax.servlet.ServletContext {
     private final ClassLoader classLoader;
     private String contextPath;
     private volatile boolean initialized; //记录是否初始化完毕
+
+    private File file;
 
     public ServletContext(InetSocketAddress socketAddress,
                           ClassLoader classLoader,
@@ -122,6 +125,22 @@ public class ServletContext implements javax.servlet.ServletContext {
             defaultCharset = HttpConstants.DEFAULT_CHARSET;
         }
         return defaultCharset;
+    }
+
+    public File getFile() {
+        return file;
+    }
+
+    public void setFile(File file) {
+        this.file = file;
+    }
+
+    public void setFile(URL url) {
+        try{
+            this.file = new File(url.toURI());
+        }catch (Exception e){
+            LogUtil.error(ServletContext.class, e,"设置file异常");
+        }
     }
 
     @Override

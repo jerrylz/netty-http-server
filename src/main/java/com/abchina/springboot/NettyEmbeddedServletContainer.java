@@ -1,6 +1,6 @@
 package com.abchina.springboot;
 
-import com.abchina.core.constants.HttpConstants;
+import cn.hutool.core.util.StrUtil;
 import com.abchina.servlet.ServletContext;
 import com.abchina.servlet.ServletRegistration;
 import com.abchina.core.AbstractNettyServer;
@@ -27,8 +27,11 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
 import javax.servlet.ServletException;
 import java.io.File;
+import java.net.InetSocketAddress;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  *
@@ -38,12 +41,29 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
     private ServletContext servletContext;
     private EventExecutorGroup dispatcherExecutorGroup;
     private ChannelHandler dispatcherHandler;
+    //servlet上下文集合，key为contextPath value为servlet上下文
+    private Map<String, ServletContext> servletContextMap = new HashMap<>();
+    //调度器
+    private Map<String, NettyServletDispatcherHandler> dispatcherHandlerMap = new HashMap<>();
+    private Map<String, DefaultEventExecutorGroup> executorGroupMap = new HashMap<>();
 
     public NettyEmbeddedServletContainer(ServletContext servletContext, int bizThreadCount) {
         super(servletContext.getServerSocketAddress());
         this.servletContext = servletContext;
         this.dispatcherExecutorGroup = new DefaultEventExecutorGroup(bizThreadCount);
         this.dispatcherHandler = new NettyServletDispatcherHandler(servletContext);
+        setInitializerMap(newInitializerChannelHandlerMap());
+    }
+
+    public NettyEmbeddedServletContainer(List<ServletContext> servletContexts, int bizThreadCount){
+        super(servletContexts.get(0).getServerSocketAddress());
+        for(ServletContext servletContext : servletContexts){
+            String contextPath = servletContext.getFile() == null ? "" : servletContext.getFile().getName();
+            servletContextMap.put(contextPath, servletContext);
+            dispatcherHandlerMap.put(contextPath, new NettyServletDispatcherHandler(servletContext));
+            executorGroupMap.put(contextPath, new DefaultEventExecutorGroup(bizThreadCount));
+        }
+        setInitializerMap(newInitializerChannelHandlerMap());
     }
 
     @Override
@@ -62,17 +82,51 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
     }
 
     @Override
+    protected Map<String, ChannelInitializer<? extends Channel>> newInitializerChannelHandlerMap() {
+        Map<String, ChannelInitializer<? extends Channel>> initializerMap = new HashMap<>();
+        Set<String> keySet = servletContextMap.keySet();
+        for(String contextPath : keySet){
+            initializerMap.put(contextPath, newInitializerChannelHandler(contextPath));
+        }
+        return initializerMap;
+    }
+
+    protected ChannelInitializer<? extends Channel> newInitializerChannelHandler(String contextPath) {
+        return new ChannelInitializer<SocketChannel>() {
+            @Override
+            protected void initChannel(SocketChannel ch) throws Exception {
+                ChannelPipeline pipeline = ch.pipeline();
+
+                pipeline.addLast("HttpCodec", new HttpServerCodec(4096, 8192, 8192, false)); //HTTP编码解码Handler
+                pipeline.addLast("Aggregator", new HttpObjectAggregator(512 * 1024));  // HTTP聚合，设置最大消息值为512KB
+                pipeline.addLast("ServletCodec",new NettyServletCodecHandler(servletContextMap.get(contextPath)) ); //处理请求，读入数据，生成Request和Response对象
+                pipeline.addLast(executorGroupMap.get(contextPath), "Dispatcher", dispatcherHandlerMap.get(contextPath)); //获取请求分发器，让对应的Servlet处理请求，同时处理404情况
+            }
+        };
+    }
+
+    @Override
     public void start() throws EmbeddedServletContainerException {
+
+        Set<String> keySet = servletContextMap.keySet();
+        for(String contextPath : keySet){
+            start(servletContextMap.get(contextPath));
+        }
+
+    }
+
+    private void start(ServletContext servletContext){
         //加载/build目录下的资源
         loadResources(servletContext);
         //初始化servlet
-        initServlet();
+        initServlet(servletContext);
         servletContext.setInitialized(true);
 
         String serverInfo = servletContext.getServerInfo();
 
         Thread serverThread = new Thread(this);
-        serverThread.setName(serverInfo);
+        String threadName = servletContext.getFile() == null ? "" : servletContext.getFile().getName();
+        serverThread.setName(threadName);
         serverThread.setUncaughtExceptionHandler((thread,throwable)->{
             //
         });
@@ -86,13 +140,10 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
      */
     private void loadResources(ServletContext servletContext){
         try{
-            File buildDir = new File(HttpConstants.ROOT_PATH+HttpConstants.BUILD_PATH);
-            File[] files;
-            if (buildDir.isDirectory() && (files = buildDir.listFiles()) != null) {
-                for (File file : files) {
-                    WebXmlModel webXmlModel = JarResourceParser.parseConfigFromJar(file);
-                    loadServletFilter(servletContext, webXmlModel);
-                }
+            File file = servletContext.getFile();
+            if(file != null){
+                WebXmlModel webXmlModel = JarResourceParser.parseConfigFromJar(file);
+                loadServletFilter(servletContext, webXmlModel);
             }
         }catch (Exception e){
             e.printStackTrace();
@@ -124,6 +175,18 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
         }
     }
 
+    private void initServlet(ServletContext servletContext){
+        Map<String, ServletRegistration> servletRegistrationMap = servletContext.getServletRegistrations();
+        for(Map.Entry<String,ServletRegistration> entry : servletRegistrationMap.entrySet()){
+            ServletRegistration registration = entry.getValue();
+            try {
+                registration.getServlet().init(registration.getServletConfig());
+            } catch (ServletException e) {
+                throw new EmbeddedServletContainerException(e.getMessage(),e);
+            }
+        }
+    }
+
     private void destroyServlet(){
         Map<String, ServletRegistration> servletRegistrationMap = servletContext.getServletRegistrations();
         for(Map.Entry<String,ServletRegistration> entry : servletRegistrationMap.entrySet()){
@@ -141,9 +204,17 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
     private static void loadServletFilter(ServletContext servletContext, WebXmlModel webXmlModel) throws ClassNotFoundException {
         //servlet部分
         WebXmlModel.ServletMappingNode[] servletMappingNodes = webXmlModel.getServletMappingNodes();
+        String name = "";
         Map<String, String> mappingNodes = new HashMap<>();
+        if(servletContext.getFile() != null){
+            name = StrUtil.subBefore(servletContext.getFile().getName(), ".", true);
+        }
+        if(!name.startsWith("/")){
+            name = "/" + name;
+        }
         for(WebXmlModel.ServletMappingNode servletMappingNode : servletMappingNodes){
-            mappingNodes.put(servletMappingNode.getServletName(), servletMappingNode.getUrlPattern());
+
+            mappingNodes.put(servletMappingNode.getServletName(), name + servletMappingNode.getUrlPattern());
         }
         WebXmlModel.ServletNode[] servletNodes = webXmlModel.getServletNodes();
 
@@ -176,6 +247,7 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
                     .addMappingForUrlPatterns(null, true, filterMappingNodes.get(filterName));
 
         }
+
     }
 
 }

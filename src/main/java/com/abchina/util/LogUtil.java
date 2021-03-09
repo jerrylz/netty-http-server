@@ -9,7 +9,7 @@ import cn.hutool.log.level.Level;
  * @author jerrylz
  * @date 2021/2/26
  */
-public class LogUtils {
+public class LogUtil {
 
     /**
      * 自定义日志

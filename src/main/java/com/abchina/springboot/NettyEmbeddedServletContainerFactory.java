@@ -15,10 +15,13 @@ import org.springframework.util.ClassUtils;
 import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  *
@@ -53,7 +56,7 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
      */
     protected void registerDefaultServlet(ServletContext servletContext){
         ServletDefaultHttpServlet defaultServlet = new ServletDefaultHttpServlet();
-        servletContext.addServlet("default",defaultServlet);
+        servletContext.addServlet("staticServlet",defaultServlet).addMapping("static-resource");
     }
 
     /**
@@ -66,33 +69,61 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
         return container;
     }
 
+    public NettyEmbeddedServletContainer newNettyEmbeddedServletContainer(List<ServletContext> servletContext){
+        NettyEmbeddedServletContainer container = new NettyEmbeddedServletContainer(servletContext, 50);
+        return container;
+    }
+
     /**
      * 新建servlet上下文
      * @return
      */
 
     public ServletContext newServletContext(){
+        return this.newServletContext(null);
+    }
+
+
+    public List<ServletContext> newServletContextList(){
         //加载外部jar资源 URL[]
         URL[] urls = getExternalJarResources();
-        return this.newServletContext(urls);
+        List<ServletContext> servletContexts = new ArrayList<>();
+        if(urls.length == 0){
+            ServletContext servletContext = newServletContext();
+            servletContexts.add(servletContext);
+            return servletContexts;
+        }
+        for(URL url : urls){
+            ServletContext servletContext = newServletContext(url);
+            servletContexts.add(servletContext);
+        }
+        return servletContexts;
     }
 
     /**
      * servlet上下文并加载外部jar资源
-     * @param urls
+     * @param url
      * @return
      */
-    public ServletContext newServletContext(URL[] urls){
+    public ServletContext newServletContext(URL url){
         //获取类加载器
         ClassLoader parentClassLoader = resourceLoader != null ? resourceLoader.getClassLoader() : ClassUtils.getDefaultClassLoader();
         //session配置信息
         ServletSessionCookieConfig sessionCookieConfig = loadSessionCookieConfig();
         ServletContext servletContext = new ServletContext(
                 new InetSocketAddress(getAddress(),getPort()),
-                new URLClassLoader(urls, parentClassLoader),
+                new URLClassLoader(url == null ? new URL[]{} : new URL[]{url}, parentClassLoader),
                 getContextPath(),
                 getServerHeader(),
                 sessionCookieConfig);
+        //设置jar文件
+        if(url != null){
+            servletContext.setFile(url);
+        }
+
+        if (isRegisterDefaultServlet()) {
+            registerDefaultServlet(servletContext);
+        }
         return servletContext;
     }
 
@@ -116,6 +147,8 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
         for(int i = 0; i < urlList.size(); i++){
             urls[i] = urlList.get(i);
         }
+
+
         return urls;
 
 

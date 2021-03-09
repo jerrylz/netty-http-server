@@ -1,8 +1,11 @@
 package com.abchina.springboot;
 
+import com.abchina.core.constants.HttpConstants;
 import com.abchina.servlet.ServletContext;
 import com.abchina.servlet.ServletRegistration;
 import com.abchina.core.AbstractNettyServer;
+import com.abchina.util.JarResourceParser;
+import com.abchina.util.WebXmlModel;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInitializer;
@@ -24,6 +27,7 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLException;
 import javax.servlet.ServletException;
 import java.io.File;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -35,7 +39,7 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
     private EventExecutorGroup dispatcherExecutorGroup;
     private ChannelHandler dispatcherHandler;
 
-    public NettyEmbeddedServletContainer(ServletContext servletContext,Ssl ssl,int bizThreadCount) throws SSLException {
+    public NettyEmbeddedServletContainer(ServletContext servletContext, int bizThreadCount) {
         super(servletContext.getServerSocketAddress());
         this.servletContext = servletContext;
         this.dispatcherExecutorGroup = new DefaultEventExecutorGroup(bizThreadCount);
@@ -59,7 +63,9 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
 
     @Override
     public void start() throws EmbeddedServletContainerException {
-        loadResources();
+        //加载/build目录下的资源
+        loadResources(servletContext);
+        //初始化servlet
         initServlet();
         servletContext.setInitialized(true);
 
@@ -71,13 +77,29 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
             //
         });
         serverThread.start();
-
         log.info("启动成功{}[{}]", serverInfo, getPort());
     }
 
-    private void loadResources(){
-
+    /**
+     * 加载资源
+     * @param servletContext
+     */
+    private void loadResources(ServletContext servletContext){
+        try{
+            File buildDir = new File(HttpConstants.ROOT_PATH+HttpConstants.BUILD_PATH);
+            File[] files;
+            if (buildDir.isDirectory() && (files = buildDir.listFiles()) != null) {
+                for (File file : files) {
+                    WebXmlModel webXmlModel = JarResourceParser.parseConfigFromJar(file);
+                    loadServletFilter(servletContext, webXmlModel);
+                }
+            }
+        }catch (Exception e){
+            e.printStackTrace();
+        }
     }
+
+
 
     @Override
     public void stop() throws EmbeddedServletContainerException {
@@ -110,13 +132,50 @@ public class NettyEmbeddedServletContainer extends AbstractNettyServer implement
         }
     }
 
-    private SslContext newSslContext(Ssl ssl) throws SSLException {
-        File certChainFile = new File(ssl.getTrustStore());
-        File keyFile = new File(ssl.getKeyStore());
-        String keyPassword = ssl.getKeyPassword();
+    /**
+     * servlet、filter放入容器
+     * @param servletContext
+     * @param webXmlModel
+     * @throws ClassNotFoundException
+     */
+    private static void loadServletFilter(ServletContext servletContext, WebXmlModel webXmlModel) throws ClassNotFoundException {
+        //servlet部分
+        WebXmlModel.ServletMappingNode[] servletMappingNodes = webXmlModel.getServletMappingNodes();
+        Map<String, String> mappingNodes = new HashMap<>();
+        for(WebXmlModel.ServletMappingNode servletMappingNode : servletMappingNodes){
+            mappingNodes.put(servletMappingNode.getServletName(), servletMappingNode.getUrlPattern());
+        }
+        WebXmlModel.ServletNode[] servletNodes = webXmlModel.getServletNodes();
 
-        SslContext sslContext = SslContext.newServerContext(certChainFile,keyFile,keyPassword);
-        return sslContext;
+        for(WebXmlModel.ServletNode node : servletNodes){
+            String servletClass = node.getServletClass();
+            String servletName = node.getServletName();
+            Map<String, String> initParamMap = new HashMap<>();
+            WebXmlModel.ServletInitParam[] servletInitParams = node.getServletInitParams();
+            if(servletInitParams != null){
+                for(WebXmlModel.ServletInitParam servletInitParam : node.getServletInitParams()){
+                    initParamMap.put(servletInitParam.getParamName(), servletInitParam.getParamValue());
+                }
+            }
+            servletContext.addServlet(servletName, servletClass).addMapping(mappingNodes.get(servletName));
+
+        }
+
+        //filter部分
+        WebXmlModel.FilterMapping[] filterMappings = webXmlModel.getFilterMappings();
+        Map<String, String> filterMappingNodes = new HashMap<>();
+        for(WebXmlModel.FilterMapping filterMapping : filterMappings){
+            filterMappingNodes.put(filterMapping.getFilterName(), filterMapping.getUrlPattern());
+        }
+        WebXmlModel.FilterNode[] filterNodes = webXmlModel.getFilterNodes();
+
+        for(WebXmlModel.FilterNode node : filterNodes){
+            String filterClass = node.getFilterClass();
+            String filterName = node.getFilterName();
+            servletContext.addFilter(filterName, filterClass)
+                    .addMappingForUrlPatterns(null, true, filterMappingNodes.get(filterName));
+
+        }
     }
 
 }

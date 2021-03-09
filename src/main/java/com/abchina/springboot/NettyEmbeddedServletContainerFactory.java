@@ -1,50 +1,32 @@
 package com.abchina.springboot;
 
+import com.abchina.core.constants.HttpConstants;
 import com.abchina.servlet.ServletContext;
 import com.abchina.servlet.ServletDefaultHttpServlet;
 import com.abchina.servlet.ServletSessionCookieConfig;
-import com.abchina.util.JarResourceParser;
-import com.abchina.util.WebXmlModel;
 import org.springframework.boot.context.embedded.AbstractEmbeddedServletContainerFactory;
 import org.springframework.boot.context.embedded.EmbeddedServletContainer;
 import org.springframework.boot.context.embedded.EmbeddedServletContainerFactory;
-import org.springframework.boot.context.embedded.Ssl;
 import org.springframework.boot.web.servlet.ServletContextInitializer;
 import org.springframework.context.ResourceLoaderAware;
 import org.springframework.core.io.ResourceLoader;
 import org.springframework.util.ClassUtils;
 
-import javax.net.ssl.SSLException;
 import java.io.File;
 import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  *
- * EmbeddedWebApplicationContext - createEmbeddedServletContainer
- * ImportAwareBeanPostProcessor
+ * servlet容器工厂
  */
 public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServletContainerFactory implements EmbeddedServletContainerFactory , ResourceLoaderAware {
-    private static String rootPath = System.getProperty("user.dir");
-    private static String bulidPath = "/build";
+
     protected ResourceLoader resourceLoader;
-
-    private ClassLoader classLoader;
-
-    public ClassLoader getClassLoader() {
-        return classLoader;
-    }
-
-    public void setClassLoader(ClassLoader classLoader) {
-        this.classLoader = classLoader;
-    }
 
     @Override
     public EmbeddedServletContainer getEmbeddedServletContainer(ServletContextInitializer... initializers) {
@@ -78,11 +60,9 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
      * 新建netty容器
      * @param servletContext servlet上下文
      * @return netty容器
-     * @throws SSLException ssl异常
      */
-    public NettyEmbeddedServletContainer newNettyEmbeddedServletContainer(ServletContext servletContext) throws SSLException {
-        Ssl ssl = getSsl();
-        NettyEmbeddedServletContainer container = new NettyEmbeddedServletContainer(servletContext,ssl,50);
+    public NettyEmbeddedServletContainer newNettyEmbeddedServletContainer(ServletContext servletContext){
+        NettyEmbeddedServletContainer container = new NettyEmbeddedServletContainer(servletContext, 50);
         return container;
     }
 
@@ -92,12 +72,20 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
      */
 
     public ServletContext newServletContext(){
+        //加载外部jar资源 URL[]
         URL[] urls = getExternalJarResources();
         return this.newServletContext(urls);
     }
 
+    /**
+     * servlet上下文并加载外部jar资源
+     * @param urls
+     * @return
+     */
     public ServletContext newServletContext(URL[] urls){
+        //获取类加载器
         ClassLoader parentClassLoader = resourceLoader != null ? resourceLoader.getClassLoader() : ClassUtils.getDefaultClassLoader();
+        //session配置信息
         ServletSessionCookieConfig sessionCookieConfig = loadSessionCookieConfig();
         ServletContext servletContext = new ServletContext(
                 new InetSocketAddress(getAddress(),getPort()),
@@ -105,34 +93,17 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
                 getContextPath(),
                 getServerHeader(),
                 sessionCookieConfig);
-                loadResources(servletContext);
         return servletContext;
     }
 
-    private void loadResources(ServletContext servletContext){
-        try{
-            File buildDir = new File(rootPath+bulidPath);
-            File[] files;
-            if (buildDir.isDirectory() && (files = buildDir.listFiles()) != null) {
-                for (File file : files) {
-                    WebXmlModel webXmlModel = JarResourceParser.parseConfigFromJar(file);
-                    System.out.println(webXmlModel);
-                    initServlet(servletContext, webXmlModel);
-                }
-            }
-        }catch (Exception e){
-            e.printStackTrace();
-        }
-
-    }
     private URL[] getExternalJarResources() {
         List<URL> urlList = new ArrayList<>();
         try{
-            File buildDir = new File(rootPath+bulidPath);
+            File buildDir = new File(HttpConstants.ROOT_PATH+HttpConstants.BUILD_PATH);
             File[] files;
             if (buildDir.isDirectory() && (files = buildDir.listFiles()) != null) {
                 for (File file : files) {
-                    URL url = new URL("file:" + rootPath + bulidPath + "/" + file.getName());
+                    URL url = new URL("file:" + HttpConstants.ROOT_PATH+HttpConstants.BUILD_PATH + File.separator+ file.getName());
                     urlList.add(url);
                 }
             }
@@ -167,43 +138,6 @@ public class NettyEmbeddedServletContainerFactory extends AbstractEmbeddedServle
         this.resourceLoader = resourceLoader;
     }
 
-    private static void initServlet(ServletContext servletContext, WebXmlModel webXmlModel) throws ClassNotFoundException {
-        WebXmlModel.ServletMappingNode[] servletMappingNodes = webXmlModel.getServletMappingNodes();
-        Map<String, String> mappingNodes = new HashMap<>();
-        for(WebXmlModel.ServletMappingNode servletMappingNode : servletMappingNodes){
-            mappingNodes.put(servletMappingNode.getServletName(), servletMappingNode.getUrlPattern());
-        }
-        WebXmlModel.ServletNode[] servletNodes = webXmlModel.getServletNodes();
 
-        for(WebXmlModel.ServletNode node : servletNodes){
-            String servletClass = node.getServletClass();
-            String servletName = node.getServletName();
-            Map<String, String> initParamMap = new HashMap<>();
-            WebXmlModel.ServletInitParam[] servletInitParams = node.getServletInitParams();
-            if(servletInitParams != null){
-                for(WebXmlModel.ServletInitParam servletInitParam : node.getServletInitParams()){
-                    initParamMap.put(servletInitParam.getParamName(), servletInitParam.getParamValue());
-                }
-            }
-            servletContext.addServlet(servletName, servletClass).addMapping(mappingNodes.get(servletName));
-
-        }
-
-
-        WebXmlModel.FilterMapping[] filterMappings = webXmlModel.getFilterMappings();
-        Map<String, String> filterMappingNodes = new HashMap<>();
-        for(WebXmlModel.FilterMapping filterMapping : filterMappings){
-            filterMappingNodes.put(filterMapping.getFilterName(), filterMapping.getUrlPattern());
-        }
-        WebXmlModel.FilterNode[] filterNodes = webXmlModel.getFilterNodes();
-
-        for(WebXmlModel.FilterNode node : filterNodes){
-            String filterClass = node.getFilterClass();
-            String filterName = node.getFilterName();
-            servletContext.addFilter(filterName, filterClass)
-                    .addMappingForUrlPatterns(null, true, filterMappingNodes.get(filterName));
-
-        }
-    }
 
 }

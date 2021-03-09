@@ -18,4 +18,8 @@ public class HttpConstants {
     public static final String HTTPS = "HTTPS";
     public static final Charset DEFAULT_CHARSET = Charset.forName("UTF-8");
 
+    public static final String ROOT_PATH = System.getProperty("user.dir");
+    //放置jar包
+    public static final String BUILD_PATH = "/build";
+
 }
